@@ -54,8 +54,10 @@ class DomainService:
         if actor.role not in roles:
             raise PermissionDenied("当前角色不能执行该动作")
 
-    def _idempotent(self, connection, *, request_id: str, action: str,
-                    payload: dict[str, Any], create: Callable[[], tuple[str, str, dict[str, Any]]]) -> WriteReceipt:
+    def _find_receipt(self, connection, *, request_id: str, action: str,
+                      payload: dict[str, Any]) -> WriteReceipt | None:
+        """返回已存在的幂等回执；request_id 被其他内容占用时报冲突。"""
+
         request_id = self._identifier(request_id, "request_id")
         payload_hash = digest(payload)
         row = connection.execute("SELECT * FROM request_receipts WHERE request_id=?", (request_id,)).fetchone()
@@ -63,11 +65,18 @@ class DomainService:
             if row["action"] != action or row["payload_hash"] != payload_hash:
                 raise ConflictError("request_id 已被不同内容使用")
             return WriteReceipt(request_id, row["resource_type"], row["resource_id"], True)
+        return None
+
+    def _idempotent(self, connection, *, request_id: str, action: str,
+                    payload: dict[str, Any], create: Callable[[], tuple[str, str, dict[str, Any]]]) -> WriteReceipt:
+        replayed = self._find_receipt(connection, request_id=request_id, action=action, payload=payload)
+        if replayed is not None:
+            return replayed
         resource_type, resource_id, response = create()
         connection.execute(
             "INSERT INTO request_receipts(request_id,action,payload_hash,resource_type,resource_id,response_json,created_at) "
             "VALUES(?,?,?,?,?,?,?)",
-            (request_id, action, payload_hash, resource_type, resource_id, canonical_json(response), self._now()),
+            (request_id, action, digest(payload), resource_type, resource_id, canonical_json(response), self._now()),
         )
         return WriteReceipt(request_id, resource_type, resource_id, False)
 

@@ -33,3 +33,14 @@ class ConflictError(DomainError):
 
     code = "conflict"
     status = 409
+
+
+class LicenseConflict(DomainError):
+    """展出沿谱系计算时存在未满足的许可，阻断登记并指明确切来源。"""
+
+    code = "license_conflict"
+    status = 422
+
+    def __init__(self, message: str, blockers: list) -> None:
+        super().__init__(message)
+        self.blockers = blockers

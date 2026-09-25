@@ -8,17 +8,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from .errors import DomainError, ValidationError
+from .errors import DomainError, LicenseConflict, ValidationError
+from .genealogy import GenealogyService
 from .service import DomainService
 from .storage import Database
 
 
 def route(service: DomainService, method: str, path: str, body: dict[str, Any] | None,
-          headers: dict[str, str] | None = None) -> tuple[int, dict[str, Any]]:
+          headers: dict[str, str] | None = None, genealogy: GenealogyService | None = None) -> tuple[int, dict[str, Any]]:
     """把一个 HTTP 语义请求分派到领域服务。"""
 
     headers = headers or {}
     body = body or {}
+    genealogy = genealogy or GenealogyService(service.database, service.clock)
     parsed = urlparse(path)
     actor_id = headers.get("X-Actor-Id", "")
     try:
@@ -48,11 +50,57 @@ def route(service: DomainService, method: str, path: str, body: dict[str, Any] |
             query = parse_qs(parsed.query)
             after = int(query.get("after_sequence", ["0"])[0])
             return 200, {"items": service.audit_events(after)}
+
+        # ----------------------------------------------------- 花灯共创谱系与授权
+        if method == "POST" and parsed.path == "/subjects":
+            receipt = genealogy.register_subject(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/works":
+            receipt = genealogy.register_work(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "GET" and parsed.path == "/works":
+            query = parse_qs(parsed.query)
+            family_id = query.get("family_id", [""])[0]
+            if not family_id:
+                raise ValidationError("family_id 不能为空")
+            return 200, {"items": genealogy.list_family(family_id)}
+        if method == "POST" and parsed.path == "/works/supersede":
+            receipt = genealogy.supersede(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/authorizations":
+            receipt = genealogy.grant_authorization(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/authorizations/revoke":
+            receipt = genealogy.revoke_authorization(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/exhibitions/evaluate":
+            result = genealogy.evaluate_exhibition(actor_id=actor_id, **body)
+            return 200, result
+        if method == "POST" and parsed.path == "/exhibitions":
+            receipt = genealogy.approve_exhibition(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "GET" and parsed.path == "/exhibitions":
+            query = parse_qs(parsed.query)
+            work_id = query.get("work_id", [""])[0]
+            if not work_id:
+                raise ValidationError("work_id 不能为空")
+            return 200, {"items": genealogy.list_exhibitions(work_id)}
+        if method == "GET" and path_parts(parsed.path)[:2] == ("works", "audit") and len(path_parts(parsed.path)) == 3:
+            work_id = path_parts(parsed.path)[2]
+            return 200, genealogy.audit_version(actor_id=actor_id, work_id=work_id)
         return 404, {"error": "route_not_found", "message": "接口不存在"}
+    except LicenseConflict as exc:
+        return exc.status, {"error": exc.code, "message": str(exc), "blockers": exc.blockers}
     except DomainError as exc:
         return exc.status, {"error": exc.code, "message": str(exc)}
     except (TypeError, ValueError) as exc:
         return 400, {"error": "invalid_request", "message": str(exc)}
+
+
+def path_parts(path: str) -> tuple[str, ...]:
+    """拆分去除首尾斜杠后的路径段。"""
+
+    return tuple(segment for segment in path.split("/") if segment)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -69,7 +117,8 @@ class Handler(BaseHTTPRequestHandler):
             self._write(400, {"error": "invalid_json", "message": "请求体必须是 UTF-8 JSON"})
             return
         status, payload = route(self.service, self.command, self.path, body,
-                                {"X-Actor-Id": self.headers.get("X-Actor-Id", "")})
+                                {"X-Actor-Id": self.headers.get("X-Actor-Id", "")},
+                                getattr(self, "genealogy", None))
         self._write(status, payload)
 
     def _write(self, status: int, payload: dict[str, Any]) -> None:
@@ -100,6 +149,7 @@ def main() -> int:
     args = parser.parse_args()
     database = Database(args.database)
     Handler.service = DomainService(database)
+    Handler.genealogy = GenealogyService(database)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     try:
         server.serve_forever()
