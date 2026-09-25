@@ -63,6 +63,81 @@ CREATE TABLE IF NOT EXISTS audit_events (
     event_hash TEXT NOT NULL UNIQUE,
     occurred_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS designs (
+    design_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS design_versions (
+    version_id TEXT PRIMARY KEY,
+    design_id TEXT NOT NULL REFERENCES designs(design_id),
+    kind TEXT NOT NULL CHECK(kind IN ('sketch','structure','public','correction')),
+    content_summary_json TEXT NOT NULL,
+    content_digest TEXT NOT NULL,
+    parent_version_id TEXT REFERENCES design_versions(version_id),
+    change_note TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS version_sources (
+    version_id TEXT NOT NULL REFERENCES design_versions(version_id),
+    source_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(version_id, source_key)
+);
+CREATE TABLE IF NOT EXISTS version_contributors (
+    version_id TEXT NOT NULL REFERENCES design_versions(version_id),
+    contributor_actor_id TEXT NOT NULL,
+    contribution_kind TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(version_id, contributor_actor_id)
+);
+CREATE TABLE IF NOT EXISTS license_grants (
+    grant_id TEXT PRIMARY KEY,
+    version_id TEXT NOT NULL REFERENCES design_versions(version_id),
+    contributor_actor_id TEXT NOT NULL,
+    terms_json TEXT NOT NULL,
+    is_minor INTEGER NOT NULL CHECK(is_minor IN (0, 1)),
+    guardian_actor_id TEXT,
+    institution_org_id TEXT,
+    status TEXT NOT NULL CHECK(status IN ('pending','effective','revoked')),
+    effective_at TEXT,
+    revoked_at TEXT,
+    revoke_reason TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(version_id, contributor_actor_id)
+);
+CREATE TABLE IF NOT EXISTS grant_confirmations (
+    grant_id TEXT NOT NULL REFERENCES license_grants(grant_id),
+    confirmation_kind TEXT NOT NULL CHECK(confirmation_kind IN ('guardian','institution')),
+    confirmer_actor_id TEXT NOT NULL,
+    confirmed_at TEXT NOT NULL,
+    PRIMARY KEY(grant_id, confirmation_kind)
+);
+CREATE TABLE IF NOT EXISTS version_supersessions (
+    supersession_id TEXT PRIMARY KEY,
+    old_version_id TEXT NOT NULL UNIQUE REFERENCES design_versions(version_id),
+    new_version_id TEXT NOT NULL REFERENCES design_versions(version_id),
+    reason TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS exhibitions (
+    exhibition_id TEXT PRIMARY KEY,
+    version_id TEXT NOT NULL REFERENCES design_versions(version_id),
+    purpose TEXT NOT NULL,
+    commercial INTEGER NOT NULL CHECK(commercial IN (0, 1)),
+    start_at TEXT NOT NULL,
+    end_at TEXT NOT NULL,
+    exhibitor_actor_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('approved','blocked')),
+    blockers_json TEXT NOT NULL,
+    permit_snapshot_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 

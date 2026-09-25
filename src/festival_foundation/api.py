@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .errors import DomainError, ValidationError
+from .lineage import CoCreationService
 from .service import DomainService
 from .storage import Database
 
@@ -44,6 +45,39 @@ def route(service: DomainService, method: str, path: str, body: dict[str, Any] |
                 raise ValidationError("site_id 不能为空")
             category = query.get("category", [None])[0]
             return 200, {"items": [item.__dict__ for item in service.list_domain_data(site_id, category)]}
+        if method == "POST" and parsed.path == "/designs":
+            receipt = service.register_design(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/design-versions":
+            receipt = service.register_version(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/licenses":
+            receipt = service.submit_license(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/license-confirmations":
+            receipt = service.confirm_license(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/license-revocations":
+            receipt = service.revoke_license(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/supersessions":
+            receipt = service.register_supersession(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/exhibitions":
+            receipt = service.submit_exhibition(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "GET" and parsed.path == "/exhibitions":
+            query = parse_qs(parsed.query)
+            exhibition_id = query.get("exhibition_id", [""])[0]
+            if not exhibition_id:
+                raise ValidationError("exhibition_id 不能为空")
+            return 200, service.get_exhibition(exhibition_id)
+        if method == "GET" and parsed.path == "/version-audit":
+            query = parse_qs(parsed.query)
+            version_id = query.get("version_id", [""])[0]
+            if not version_id:
+                raise ValidationError("version_id 不能为空")
+            return 200, service.get_version_audit(version_id)
         if method == "GET" and parsed.path == "/audit-events":
             query = parse_qs(parsed.query)
             after = int(query.get("after_sequence", ["0"])[0])
@@ -99,7 +133,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
     database = Database(args.database)
-    Handler.service = DomainService(database)
+    Handler.service = CoCreationService(database)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     try:
         server.serve_forever()
